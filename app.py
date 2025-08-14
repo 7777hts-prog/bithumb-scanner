@@ -1,4 +1,4 @@
-import asyncio, os
+import asyncio, os, threading
 from flask import Flask, jsonify
 import httpx
 from config import (
@@ -120,15 +120,27 @@ async def scan():
         out.sort(key=lambda x: (not x["pass"], -x["score"], -x["value_24h"]))
         return jsonify({"ok": True, "candidates": out[:50], "lead_thresh": round(LEAD_THRESH,2)})
 
-@app.before_first_request
-def _init_bg():
-    loop = asyncio.get_event_loop()
-    async def boot():
-        global SYMBOL_MAP
-        SYMBOL_MAP = await build_intersection()
-        pairs = list(SYMBOL_MAP.values())
-        loop.create_task(run_stream(pairs))
-    loop.create_task(boot())
+# ---------- Flask 3.x 호환: 첫 요청 때 1회만 초기화 ----------
+_init_done = False
+_init_lock = threading.Lock()
+
+async def _boot():
+    global SYMBOL_MAP
+    SYMBOL_MAP = await build_intersection()
+    pairs = list(SYMBOL_MAP.values())
+    asyncio.get_event_loop().create_task(run_stream(pairs))
+
+@app.before_request
+def _ensure_init():
+    global _init_done
+    if _init_done:
+        return
+    with _init_lock:
+        if _init_done:
+            return
+        asyncio.get_event_loop().create_task(_boot())
+        _init_done = True
+# -------------------------------------------------------------
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT","8000"))
