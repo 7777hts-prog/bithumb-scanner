@@ -1,7 +1,3 @@
-Flask==2.3.3
-requests
-websockets
-httpx
-pandas
-numpy
-python-dotenv
+Flask[async]==3.0.3
+requests==2.31.0
+websocket-client==1.8.0
