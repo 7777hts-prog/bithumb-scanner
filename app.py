@@ -1,4 +1,4 @@
-# app.py — Flask 3.x + 안전가드 + 필터링(통과 상위 3개 기본)
+# app.py — Flask 3.x + 안전가드 + 상위3 기본 + 표 뷰
 
 import os, threading, asyncio
 from flask import Flask, jsonify, request
@@ -237,6 +237,143 @@ async def scan():
         "candidates": picked,
         "errors": errors[:10]
     }), 200
+
+# ---- HTML Table View: /scan/table ----
+@app.get("/scan/table")
+async def scan_table():
+    """
+    /scan 과 동일한 쿼리 파라미터를 사용:
+      only_pass=1|0, top=3, min_lead=0, min_score=0, sort=score|lead|value, desc=1|0
+    """
+    # 1) /scan 실행 (동일 파라미터 사용)
+    resp = await scan()
+    response_obj = resp[0] if isinstance(resp, tuple) else resp
+    data = response_obj.get_json(silent=True) or {"ok": False, "candidates": [], "params": {}}
+
+    ok = data.get("ok", False)
+    params = data.get("params", {})
+    lead_thresh = data.get("lead_thresh", 0)
+    candidates = data.get("candidates", [])
+    errors = data.get("errors", [])
+
+    def fmt_pct(x):
+        try:
+            return f"{float(x)*100:.2f}%"
+        except:
+            return "-"
+
+    rows_html = []
+    if ok and candidates:
+        for r in candidates:
+            rows_html.append(f"""
+            <tr>
+                <td class="sym">{r.get('symbol','-')}</td>
+                <td>{r.get('price','-')}</td>
+                <td>{r.get('value_24h','-'):,}</td>
+                <td>{r.get('vol_surge','-')}</td>
+                <td>{r.get('orderbook_ratio','-')}</td>
+                <td>{fmt_pct(r.get('premium')) if r.get('premium') is not None else '-'}</td>
+                <td>{r.get('ma_compression','-')}</td>
+                <td>{r.get('lead','-')}</td>
+                <td>{r.get('score','-')}</td>
+                <td><span class="pill { 'yes' if r.get('pass') else 'no' }">{'PASS' if r.get('pass') else 'NO'}</span></td>
+            </tr>
+            """)
+    else:
+        rows_html.append("""
+        <tr><td colspan="10" style="text-align:center;color:#999;">No candidates</td></tr>
+        """)
+
+    err_html = ""
+    if errors:
+        err_items = "".join([f"<li><code>{e.get('symbol','?')}</code> — {e.get('error','')}</li>" for e in errors])
+        err_html = f"""
+        <details class="errors"><summary>Errors ({len(errors)})</summary>
+            <ul>{err_items}</ul>
+        </details>
+        """
+
+    from urllib.parse import urlencode
+    q = dict(request.args)
+    base_scan_url = "/scan?" + urlencode(q) if q else "/scan"
+
+    html = f"""
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>bithumb-scanner | candidates</title>
+<style>
+  :root {{
+    --bg:#0f1115; --fg:#e6e6e6; --muted:#9aa0aa; --card:#161a22; --line:#262b36; --acc:#4cc9f0; --ok:#22c55e; --no:#ef4444;
+  }}
+  * {{ box-sizing: border-box; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, 'Noto Sans KR', Arial, 'Apple Color Emoji', 'Segoe UI Emoji'; }}
+  body {{ margin:0; background:var(--bg); color:var(--fg); padding:16px; }}
+  .wrap {{ max-width:1200px; margin:0 auto; }}
+  h1 {{ font-size:18px; margin:0 0 12px; color:#fff; }}
+  .meta {{ display:flex; gap:12px; flex-wrap:wrap; color:var(--muted); font-size:12px; margin-bottom:12px; }}
+  .card {{ background:var(--card); border:1px solid var(--line); border-radius:12px; overflow:hidden; box-shadow:0 2px 8px rgba(0,0,0,.35); }}
+  table {{ width:100%; border-collapse:collapse; font-size:13px; }}
+  th, td {{ padding:10px 12px; border-bottom:1px solid var(--line); text-align:right; white-space:nowrap; }}
+  th {{ background:#1b2130; position:sticky; top:0; z-index:1; }}
+  td.sym, th.sym {{ text-align:left; }}
+  tr:hover {{ background:#19202c; }}
+  .pill {{ padding:2px 8px; border-radius:999px; font-weight:600; font-size:12px; }}
+  .pill.yes {{ background:rgba(34,197,94,.15); color:var(--ok); border:1px solid rgba(34,197,94,.35); }}
+  .pill.no {{ background:rgba(239,68,68,.12); color:var(--no); border:1px solid rgba(239,68,68,.35); }}
+  .toolbar {{ display:flex; gap:8px; justify-content:space-between; align-items:center; padding:10px 12px; border-bottom:1px solid var(--line); background:#171c27; }}
+  .toolbar a {{ color:var(--acc); text-decoration:none; font-size:13px; }}
+  details.errors summary {{ cursor:pointer; color:#eab308; margin:12px 0; }}
+  code {{ background:#10131a; padding:2px 6px; border-radius:6px; border:1px solid var(--line); }}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>급등 후보 스캐너 — Table view</h1>
+  <div class="meta">
+    <div>ok: <b>{'true' if ok else 'false'}</b></div>
+    <div>lead_thresh: <b>{lead_thresh:.2f}</b></div>
+    <div>params: <code>{params}</code></div>
+    <div><a href="{base_scan_url}" target="_blank">원본 JSON 보기</a></div>
+  </div>
+
+  <div class="card">
+    <div class="toolbar">
+      <div>총 {len(candidates)}개</div>
+      <div>
+        <a href="/scan/table?only_pass=1&top=3">PASS 상위3</a> ·
+        <a href="/scan/table?only_pass=1&top=20&sort=lead">리드TOP20</a> ·
+        <a href="/scan/table?only_pass=0&top=40&sort=value">거래대금TOP40</a>
+      </div>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th class="sym">Symbol</th>
+          <th>Price</th>
+          <th>24h Value</th>
+          <th>Vol×</th>
+          <th>OB Ratio</th>
+          <th>Premium</th>
+          <th>MAcmp</th>
+          <th>Lead</th>
+          <th>Score</th>
+          <th>Pass</th>
+        </tr>
+      </thead>
+      <tbody>
+        {''.join(rows_html)}
+      </tbody>
+    </table>
+  </div>
+
+  {err_html}
+</div>
+</body>
+</html>
+"""
+    return html, 200, {"Content-Type": "text/html; charset=utf-8"}
 
 # ===== 로컬 실행 =====
 if __name__ == "__main__":
