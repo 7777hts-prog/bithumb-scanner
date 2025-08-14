@@ -1,5 +1,7 @@
-Flask==3.0.3
-httpx==0.27.2
-uvicorn==0.30.6
-websockets==12.0
-python-dotenv==1.0.1
+Flask==2.3.3
+requests
+websockets
+httpx
+pandas
+numpy
+python-dotenv
